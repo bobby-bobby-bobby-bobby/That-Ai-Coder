@@ -25,6 +25,7 @@ class TestSparseRuntime(unittest.TestCase):
         rt = SparseRuntime(vocab_size=128, cache_items=16)
         t1 = rt.tokenize_sparse("hello world")
         t2 = rt.tokenize_sparse("hello world")
+        self.assertIs(t1, t2)
         merged = rt.merge_texts(["hello", "world", "hello"], normalize=False)
         self.assertEqual(t1.values, t2.values)
         self.assertGreaterEqual(len(merged.values), len(t1.values))
