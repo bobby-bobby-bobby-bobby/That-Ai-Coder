@@ -20,8 +20,8 @@ class ExpertModule:
     weights: Dict[int, float] = field(default_factory=dict)
     state: ExpertState = ExpertState.ACTIVE
     success_count: int = 1
-    fail_count: int = 0
-    use_count: int = 1
+    success_count: int = 0
+    use_count: int = 0
     recent_scores: List[float] = field(default_factory=list)
 
     def score(self, tensor: SparseTensor) -> float:
