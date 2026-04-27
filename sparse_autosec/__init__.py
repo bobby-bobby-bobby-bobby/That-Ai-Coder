@@ -1,5 +1,6 @@
 """Sparse Expert AutoSec package."""
 
-from .system import SparseExpertAutoSec
+from .config import AutoSecConfig
+from .system import SparseExpertAutoSec, TaskReport
 
-__all__ = ["SparseExpertAutoSec"]
+__all__ = ["AutoSecConfig", "SparseExpertAutoSec", "TaskReport"]

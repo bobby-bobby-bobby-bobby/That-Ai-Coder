@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import random
 import subprocess
@@ -17,16 +16,18 @@ class ExecutionResult:
     stdout: str
     return_code: int
     input_payload: str
+    anomaly: str | None = None
 
 
 class SandboxedExecutor:
-    """Runs target script in isolated temp directory with strict timeout."""
+    """Executes target file in ephemeral directory with bounded runtime."""
 
-    def __init__(self, timeout_s: float = 1.2):
+    def __init__(self, timeout_s: float = 1.5, sandbox_prefix: str = "autosec_sandbox_"):
         self.timeout_s = timeout_s
+        self.sandbox_prefix = sandbox_prefix
 
     def run(self, target_file: Path, payload: str) -> ExecutionResult:
-        with tempfile.TemporaryDirectory(prefix="autosec_sandbox_") as td:
+        with tempfile.TemporaryDirectory(prefix=self.sandbox_prefix) as td:
             tmp_target = Path(td) / target_file.name
             tmp_target.write_text(target_file.read_text())
             proc = subprocess.run(
@@ -36,18 +37,30 @@ class SandboxedExecutor:
                 timeout=self.timeout_s,
                 cwd=td,
             )
-            crashed = proc.returncode != 0
+            anomaly = self._anomaly(proc.stdout, proc.stderr, proc.returncode)
             return ExecutionResult(
-                crashed=crashed,
+                crashed=proc.returncode != 0,
                 stderr=proc.stderr,
                 stdout=proc.stdout,
                 return_code=proc.returncode,
                 input_payload=payload,
+                anomaly=anomaly,
             )
+
+    @staticmethod
+    def _anomaly(stdout: str, stderr: str, return_code: int) -> str | None:
+        low = (stdout + "\n" + stderr).lower()
+        if "segmentation fault" in low or "heap-buffer-overflow" in low:
+            return "memory_error"
+        if "traceback" in low and return_code != 0:
+            return "unhandled_exception"
+        if return_code != 0:
+            return "runtime_error"
+        return None
 
 
 class StructuredMutator:
-    """Structured fuzzing for command/code injection style payloads."""
+    """Generates mixed grammar-aware and random payloads."""
 
     def __init__(self) -> None:
         self.seed_payloads = [
@@ -56,48 +69,68 @@ class StructuredMutator:
             "__import__('os').system('echo pwned')",
             "$(echo pwned)",
             "'; rm -rf / #",
+            "../../../etc/passwd",
             '{"x": "A"}',
+            "${7*7}",
+            "<script>alert(1)</script>",
         ]
+        self.extra_operators = ["'", '"', ";", "|", "&", "$", "(", ")", "_", "{", "}", "`", "\\", "/"]
 
-    def generate(self, rounds: int = 20) -> List[str]:
+    def generate(self, rounds: int = 40) -> List[str]:
         out = list(self.seed_payloads)
-        alphabet = ["'", '"', ";", "|", "&", "$", "(", ")", "_", "{"]
         for _ in range(rounds):
             base = random.choice(self.seed_payloads)
-            insert = "".join(random.choice(alphabet) for _ in range(random.randint(1, 4)))
-            pos = random.randint(0, len(base))
-            out.append(base[:pos] + insert + base[pos:])
+            mutation_kind = random.choice(["insert", "append", "double", "splice"])
+            out.append(self._mutate(base, mutation_kind))
         return out
 
+    def _mutate(self, base: str, kind: str) -> str:
+        if kind == "insert":
+            insert = "".join(random.choice(self.extra_operators) for _ in range(random.randint(1, 6)))
+            pos = random.randint(0, len(base))
+            return base[:pos] + insert + base[pos:]
+        if kind == "append":
+            suffix = random.choice(["&&echo pwned", "||true", ";sleep 0", "#comment", "\nprint(1)"])
+            return base + suffix
+        if kind == "double":
+            return base + random.choice([" ", "::", "__"]) + base
+        split = random.randint(0, len(base))
+        return base[:split] + random.choice(self.seed_payloads) + base[split:]
 
+
+@dataclass
 class VulnerabilitySignal:
-    def __init__(self, signature: str, details: str, exploitability: str):
-        self.signature = signature
-        self.details = details
-        self.exploitability = exploitability
+    signature: str
+    details: str
+    exploitability: str
+    confidence: float
 
 
 class Analyzer:
     def detect_static(self, code: str) -> List[VulnerabilitySignal]:
         findings: List[VulnerabilitySignal] = []
         if "eval(" in code:
-            findings.append(VulnerabilitySignal("py_eval_user_input", "Unsanitized eval() usage", "high"))
-        if "os.system(" in code and "sys.argv" in code:
-            findings.append(VulnerabilitySignal("shell_injection", "os.system with user input", "high"))
+            findings.append(VulnerabilitySignal("py_eval_user_input", "Unsanitized eval() usage", "high", 0.98))
+        if "exec(" in code:
+            findings.append(VulnerabilitySignal("py_exec_user_input", "exec() exposed to user supplied string", "high", 0.92))
+        if "subprocess" in code and "shell=True" in code:
+            findings.append(VulnerabilitySignal("shell_injection", "subprocess shell=True likely with untrusted input", "high", 0.94))
+        if "pickle.loads(" in code:
+            findings.append(VulnerabilitySignal("unsafe_deserialization", "pickle.loads on external input", "high", 0.91))
         return findings
 
     def detect_dynamic(self, result: ExecutionResult) -> VulnerabilitySignal | None:
         out_lines = [ln.strip().lower() for ln in result.stdout.splitlines()]
         if "pwned" in out_lines:
-            return VulnerabilitySignal("runtime_command_execution", "Injected payload executed", "high")
-        if result.crashed:
-            return VulnerabilitySignal("runtime_crash", result.stderr.strip()[:200], "medium")
+            return VulnerabilitySignal("runtime_command_execution", "Injected payload executed", "high", 0.99)
+        if result.anomaly == "memory_error":
+            return VulnerabilitySignal("runtime_memory_error", "Potential memory corruption/overflow", "high", 0.9)
+        if result.anomaly == "unhandled_exception":
+            return VulnerabilitySignal("runtime_crash", result.stderr.strip()[:240], "medium", 0.7)
         return None
 
 
 class PatchEngine:
-    """Generate deterministic patches and re-validate in isolation."""
-
     def propose_patch(self, code: str, signature: str) -> str:
         patched = code
         if signature == "py_eval_user_input":
@@ -106,28 +139,48 @@ class PatchEngine:
                 patched = (
                     "import ast\n"
                     "def safe_eval(expr: str):\n"
-                    "    node = ast.parse(expr, mode='eval')\n"
-                    "    allowed = (ast.Expression, ast.Constant, ast.BinOp, ast.UnaryOp, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow)\n"
-                    "    for n in ast.walk(node):\n"
-                    "        if not isinstance(n, allowed):\n"
-                    "            raise ValueError('unsafe expression')\n"
-                    "    return eval(compile(node, '<safe_eval>', 'eval'))\n\n"
+                    "    node = ast.parse(expr, mode='eval').body\n"
+                    "    def _eval(n):\n"
+                    "        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)): return n.value\n"
+                    "        if isinstance(n, ast.BinOp):\n"
+                    "            l, r = _eval(n.left), _eval(n.right)\n"
+                    "            if isinstance(n.op, ast.Add): return l + r\n"
+                    "            if isinstance(n.op, ast.Sub): return l - r\n"
+                    "            if isinstance(n.op, ast.Mult): return l * r\n"
+                    "            if isinstance(n.op, ast.Div): return l / r\n"
+                    "            if isinstance(n.op, ast.Mod): return l % r\n"
+                    "            if isinstance(n.op, ast.Pow): return l ** r\n"
+                    "        if isinstance(n, ast.UnaryOp):\n"
+                    "            v = _eval(n.operand)\n"
+                    "            if isinstance(n.op, ast.UAdd): return +v\n"
+                    "            if isinstance(n.op, ast.USub): return -v\n"
+                    "        raise ValueError('unsafe expression')\n"
+                    "    return _eval(node)\n\n"
                 ) + patched
+        if signature == "py_exec_user_input":
+            patched = patched.replace("exec(user)", "raise ValueError('exec blocked by autosec')")
         if signature == "shell_injection":
-            patched = patched.replace("os.system(user)", "print('blocked shell command')")
+            patched = patched.replace("shell=True", "shell=False")
+        if signature == "unsafe_deserialization":
+            patched = patched.replace("pickle.loads(", "json.loads(")
+            if "import json" not in patched:
+                patched = "import json\n" + patched
         return patched
 
     def validate_patch(self, target_file: Path, patched_code: str, mutator: StructuredMutator) -> bool:
         temp = target_file.with_suffix(".patched.py")
         temp.write_text(patched_code)
         executor = SandboxedExecutor()
+        safe_payload_seen = False
         try:
-            for payload in mutator.generate(15):
+            for payload in mutator.generate(30):
                 result = executor.run(temp, payload)
                 out_lines = [ln.strip().lower() for ln in result.stdout.splitlines()]
+                if payload == "1+1" and result.return_code == 0:
+                    safe_payload_seen = True
                 if "pwned" in out_lines:
                     return False
-            return True
+            return safe_payload_seen
         finally:
             if temp.exists():
                 os.remove(temp)

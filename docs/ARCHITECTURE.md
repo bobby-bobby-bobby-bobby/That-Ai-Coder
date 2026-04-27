@@ -1,54 +1,86 @@
-# Sparse Expert AutoSec Architecture
+# Sparse Expert AutoSec Architecture (Expanded)
 
-## 1. Core Model (Stable)
-- `CoreModel` provides sparse task encoding and coordination scoring.
-- Core weights are fixed except a small `Adapter` delta (LoRA-style sparse updates).
-- All task intelligence orchestration flows through this small coordinator.
+## 1) Stable Core Model
+- `CoreModel` is intentionally small and stable.
+- Only `Adapter` deltas update during controlled training cycles.
+- Core functions:
+  - task encoding (`encode_task`)
+  - complexity estimation (`score_task_complexity`)
+  - planning tags (`propose_plan_tags`)
 
-## 2. Expert Module System
-- `ExpertPool` starts with 10 experts in distinct security domains.
-- `ExpertModule` instances are independently trainable and tiny (sparse linear weights).
-- New expert creation is gated by repeated failure signatures (threshold >= 3).
+## 2) Sparse Expert Modules
+- 10 seed experts initialized at boot across distinct vulnerability domains.
+- Expert structure:
+  - sparse weights
+  - independent success/failure counters
+  - health/confidence signals
+  - lifecycle state (`ACTIVE`, `QUIESCENT`, `RETIRED`)
 
-## 3. Routing / Gating
-- `SparseRouter` scores experts via sparse dot products.
-- Applies anti-collapse penalty (`load_penalty`) and confidence contribution.
-- Selects only 2-5 experts per task (bounded by `min_k`, `max_k`).
+## 3) Controlled Expert Lifecycle (Innovation #1)
+- `ExpertLifecycleManager` handles:
+  - spawn: only when repeated signature failures pass threshold
+  - quiesce: low-health experts moved out of active routing set
+  - retire: persistent low-health quiescent experts retired
+- Prevents random/frequent expert growth and caps instability.
 
-## 4. Controlled Learning
-- `ControlledLearningSystem` defines strict `INFERENCE` and `TRAINING` modes.
-- No updates occur during inference mode.
-- Training mode only enters when repeated failures are confirmed.
-- Uses replay buffer + lightweight adapter/expert updates + post-patch validation before writing final patch.
+## 4) Routing / Gating
+- Router computes sparse scores with four terms:
+  - exploit score (expert sparse dot)
+  - confidence bonus
+  - UCB exploration bonus
+  - load penalty
+- Router selects only 2–5 experts depending on estimated task complexity.
 
-## 5. External Memory
-- `ExternalMemory` stores historical failures and successful fixes.
-- Retrieval path checks prior fixes before retraining.
-- Memory informs expert spawning, route nudging, and patch reuse.
+## 5) Controlled Learning System
+- Two modes:
+  - `INFERENCE`: no updates
+  - `TRAINING`: explicit, threshold-gated cycle only
+- Includes:
+  - replay buffer
+  - adapter update (parameter-efficient)
+  - per-expert tiny updates
+  - replay rehearsal to reduce forgetting
 
-## 6. Execution and Fuzzing
-- `SandboxedExecutor` runs target code in temporary isolated directory.
-- `StructuredMutator` generates payloads from seed corpus + structure-aware mutations.
-- Captures crash and behavioral anomalies (e.g., command execution marker).
+## 6) External Memory
+- Stores failure records, fix records (with patch code), and tokenized pattern summaries.
+- Retrieval-first behavior: cached successful fix is attempted before generating a new patch.
+- Memory informs:
+  - expert spawning conditions
+  - related signature retrieval
+  - training triggers
 
-## 7. Analysis and Patching
-- `Analyzer` performs static+dynamic signal extraction.
-- `PatchEngine` generates deterministic patches for known classes.
-- Patches are validated by re-fuzzing before final application.
+## 7) Execution & Fuzzing
+- `SandboxedExecutor` runs target in ephemeral temp sandbox.
+- `StructuredMutator` performs hybrid seed + structural mutations.
+- Captures:
+  - crashes
+  - command execution behavior
+  - anomaly categories (runtime, unhandled exception, memory error)
 
-## 8. Lightweight Runtime / Low Memory
-- `SparseRuntime` uses hash-based sparse tokenization.
-- `RuntimeCache` avoids repeated encoding allocations.
-- Sparse arithmetic minimizes tensor memory footprint and computation.
+## 8) Analysis + Patching + Validation
+- `Analyzer` combines static and dynamic signals.
+- `PatchEngine` deterministically transforms vulnerable patterns.
+- Patch is accepted only after:
+  1. symbolic safety checks (`SymbolicPatchVerifier`) (Innovation #2: hybrid symbolic+neural control)
+  2. dynamic re-validation under mutated payloads
 
-## 9. Novel Innovations
-1. **Event-triggered expert lifecycle management**: expert spawning happens only when statistically repeated unresolved failures happen, preventing parameter growth explosions.
-2. **Success-history adaptive routing nudges**: replay integrates routing success feedback to bias future sparse selection toward historically effective experts without full retraining.
+## 9) Lightweight Runtime
+- `SparseTensor` for compact representation.
+- `TensorPool` to reduce allocations.
+- `RuntimeCache` for incremental inference on repeated tasks.
 
-## 10. Data Flow
-1. Input target enters scanner.
-2. Core encodes task; router selects 2-5 experts.
-3. Static analysis + sandboxed fuzzing emit vulnerability signals.
-4. Memory lookup attempts fix retrieval.
-5. Patch generation + isolated validation.
-6. On repeated failure signatures, controlled training mode updates adapters/experts with replay.
+## 10) Colab training workflow
+- Notebook: `notebooks/sparse_autosec_training_colab.ipynb`
+  - clones CVEfixes open-source dataset repo
+  - builds bootstrapped and dataset-driven samples
+  - runs controlled training cycles
+  - exports adapter checkpoint
+- Notebook: `notebooks/sparse_autosec_router_calibration_colab.ipynb`
+  - simulates repeated failure streams
+  - demonstrates lifecycle spawn/quiesce/retire behavior
+
+## 11) Why this design is efficient
+- Sparse activation across experts means only a few modules run per task.
+- Adapter-only core updates avoid catastrophic overwrite and reduce memory pressure.
+- Retrieval-first memory avoids unnecessary retraining.
+- Lifecycle pruning limits model growth and long-term computational drift.
