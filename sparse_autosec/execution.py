@@ -117,6 +117,10 @@ class Analyzer:
             findings.append(VulnerabilitySignal("shell_injection", "subprocess shell=True likely with untrusted input", "high", 0.94))
         if "pickle.loads(" in code:
             findings.append(VulnerabilitySignal("unsafe_deserialization", "pickle.loads on external input", "high", 0.91))
+        if "strcpy(" in code or "gets(" in code:
+            findings.append(VulnerabilitySignal("c_buffer_overflow", "Unsafe C string copy primitive", "high", 0.88))
+        if "scanf(" in code and "%s" in code:
+            findings.append(VulnerabilitySignal("c_unbounded_scanf", "Unbounded scanf string read", "high", 0.83))
         return findings
 
     def detect_dynamic(self, result: ExecutionResult) -> VulnerabilitySignal | None:
@@ -128,6 +132,12 @@ class Analyzer:
         if result.anomaly == "unhandled_exception":
             return VulnerabilitySignal("runtime_crash", result.stderr.strip()[:240], "medium", 0.7)
         return None
+
+
+    @staticmethod
+    def exploitability_score(signal: VulnerabilitySignal) -> float:
+        rank = {"low": 0.2, "medium": 0.6, "high": 0.95}
+        return rank.get(signal.exploitability, 0.5) * signal.confidence
 
 
 class PatchEngine:
@@ -165,6 +175,11 @@ class PatchEngine:
             patched = patched.replace("pickle.loads(", "json.loads(")
             if "import json" not in patched:
                 patched = "import json\n" + patched
+        if signature == "c_buffer_overflow":
+            patched = patched.replace("strcpy(", "strncpy(")
+            patched = patched.replace("gets(", "fgets(")
+        if signature == "c_unbounded_scanf":
+            patched = patched.replace("%s", "%255s")
         return patched
 
     def validate_patch(self, target_file: Path, patched_code: str, mutator: StructuredMutator) -> bool:

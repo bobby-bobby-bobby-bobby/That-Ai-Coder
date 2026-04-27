@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from math import log, sqrt
 from typing import Dict, List, Tuple
 
+from .bandit import RoutingBandit
 from .experts import ExpertPool
 from .runtime import SparseRuntime, SparseTensor
 
@@ -17,7 +18,7 @@ class RoutingDecision:
 
 
 class SparseRouter:
-    """Sparse MoE router with confidence, load balancing, and anti-collapse exploration."""
+    """Sparse MoE router with anti-collapse, load balancing, and bandit adaptation."""
 
     def __init__(self, runtime: SparseRuntime, pool: ExpertPool, min_k: int = 2, max_k: int = 5):
         self.runtime = runtime
@@ -25,6 +26,7 @@ class SparseRouter:
         self.min_k = min_k
         self.max_k = max_k
         self.total_routes = 1
+        self.bandit = RoutingBandit()
 
     def route(self, tensor: SparseTensor, complexity: float = 0.5) -> RoutingDecision:
         score_rows: List[Tuple[str, float]] = []
@@ -44,16 +46,22 @@ class SparseRouter:
                 f"explore={exploration:.3f}, load_penalty={load_penalty:.3f}"
             )
 
+        score_map = {n: s for n, s in score_rows}
+        bandit_rows = self.bandit.score(names, score_map)
+
         k = self._choose_k(len(score_rows), complexity)
-        selected = self.runtime.topk(score_rows, k)
+        selected = bandit_rows[:k]
         conf = sum(max(0.0, s) for _, s in selected) / max(1, k)
         self.total_routes += 1
         return RoutingDecision(
             selected=[name for name, _ in selected],
             confidence=conf,
-            raw_scores={name: score for name, score in score_rows},
+            raw_scores={name: score for name, score in bandit_rows},
             rationale=rationale,
         )
+
+    def update_reward(self, selected: List[str], reward: float) -> None:
+        self.bandit.update(selected, reward)
 
     def _choose_k(self, n_experts: int, complexity: float) -> int:
         if n_experts <= self.min_k:

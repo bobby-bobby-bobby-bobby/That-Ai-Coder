@@ -4,27 +4,33 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List
 
+from .budget import ResourcePolicy
 from .config import AutoSecConfig
 from .core import CoreModel
 from .execution import Analyzer, PatchEngine, SandboxedExecutor, StructuredMutator, VulnerabilitySignal
 from .experts import ExpertModule, ExpertPool
 from .lifecycle import ExpertLifecycleManager
 from .memory import ExternalMemory, FailureRecord, FixRecord
+from .planner import TaskPlanner
 from .router import SparseRouter
 from .runtime import SparseRuntime
 from .symbolic import SymbolicPatchVerifier
 from .telemetry import Telemetry
 from .training import ControlledLearningSystem
+from .validator import PatchRanker
 
 
 @dataclass
 class TaskReport:
     findings: List[str]
     exploitability: Dict[str, str]
+    exploitability_scores: Dict[str, float]
     patched: bool
     patch_signature: str | None
     routing: Dict[str, float]
     route_rationale: Dict[str, str]
+    selected_experts: List[str]
+    plan_steps: List[str]
     lifecycle_events: Dict[str, List[str]] = field(default_factory=dict)
     telemetry: Dict[str, int] = field(default_factory=dict)
 
@@ -69,6 +75,13 @@ class SparseExpertAutoSec:
             self.memory,
             failure_threshold=self.config.learning.trigger_failures,
         )
+        self.planner = TaskPlanner()
+        self.policy = ResourcePolicy(
+            max_latency_ms=self.config.policy.max_latency_ms,
+            max_fuzz_cases=self.config.policy.max_fuzz_cases,
+            max_train_steps=self.config.policy.max_train_steps,
+        )
+        self.ranker = PatchRanker(self.patcher, self.symbolic, self.mutator)
 
     def _seed_experts(self) -> None:
         specs = [
@@ -90,23 +103,32 @@ class SparseExpertAutoSec:
             self.experts.add_expert(ex)
 
     def process_target(self, target_file: Path) -> TaskReport:
+        budget = self.policy.new_state()
         self.telemetry.emit("process_start", file=str(target_file))
+
         code = target_file.read_text()
         static_findings = self.analyzer.detect_static(code)
+        related = []
+        for item in static_findings:
+            related.extend(self.memory.related_signatures(item.signature))
+        plan = self.planner.build_plan([item.signature for item in static_findings], related)
+
         task_text = self._task_text(target_file, static_findings)
         complexity = self.core.score_task_complexity(task_text)
         decision = self.router.route(self.core.encode_task(task_text), complexity=complexity)
         self.telemetry.emit("routed", selected=len(decision.selected), confidence=decision.confidence)
 
-        dynamic_findings = self._run_dynamic_scan(target_file)
+        dynamic_findings = self._run_dynamic_scan(target_file, budget)
         all_findings = static_findings + dynamic_findings
 
         patch_signature = None
         patched = False
         exploitability: Dict[str, str] = {}
+        exploitability_scores: Dict[str, float] = {}
 
         for finding in all_findings:
             exploitability[finding.signature] = finding.exploitability
+            exploitability_scores[finding.signature] = self.analyzer.exploitability_score(finding)
             self.memory.add_failure(
                 FailureRecord(
                     signature=finding.signature,
@@ -118,47 +140,50 @@ class SparseExpertAutoSec:
             )
             self.telemetry.emit("failure_recorded", signature=finding.signature, confidence=int(finding.confidence * 100))
 
-            cached_fix = self.memory.find_similar_fix(finding.signature)
-            if cached_fix:
-                patched, patch_signature = self._apply_cached_patch(target_file, code, cached_fix.patch_code, finding.signature)
-                if patched:
-                    break
-
-            patched_code = self.patcher.propose_patch(code, finding.signature)
-            if patched_code == code:
-                continue
-
-            symbolic_result = self.symbolic.verify_python_source(patched_code)
-            if not symbolic_result.safe:
-                self.telemetry.emit("symbolic_reject", signature=finding.signature)
-                continue
-
-            if self.patcher.validate_patch(target_file, patched_code, self.mutator):
-                target_file.write_text(patched_code)
+        signatures = [f.signature for f in all_findings]
+        if signatures:
+            cached = self._find_best_cached_fix(signatures)
+            if cached and self.patcher.validate_patch(target_file, cached.patch_code, self.mutator):
+                target_file.write_text(cached.patch_code)
                 patched = True
-                patch_signature = finding.signature
+                patch_signature = cached.signature
+                self.telemetry.emit("cached_patch_applied", signature=cached.signature)
+
+        if not patched and signatures:
+            candidates = self.ranker.generate_candidates(code, signatures)
+            accepted = self.ranker.validate(target_file, candidates)
+            if accepted:
+                target_file.write_text(accepted.code)
+                patched = True
+                patch_signature = accepted.signature
                 self.memory.add_fix(
                     FixRecord(
-                        signature=finding.signature,
-                        patch_summary="auto_generated_patch",
-                        patch_code=patched_code,
+                        signature=accepted.signature,
+                        patch_summary="ranked_auto_patch",
+                        patch_code=accepted.code,
                         success=True,
                     )
                 )
-                self.telemetry.emit("patch_applied", signature=finding.signature)
-                break
+                self.telemetry.emit("patch_applied", signature=accepted.signature)
 
         lifecycle_decision = self.lifecycle.step()
-        self._training_feedback(task_text, decision.selected, patch_signature, patched)
+        self._training_feedback(task_text, decision.selected, patch_signature, patched, budget)
 
+        reward = 1.0 if patched else 0.0
+        self.router.update_reward(decision.selected, reward)
+
+        self.telemetry.emit("budget_elapsed_ms", value=int(budget.elapsed_ms()))
         self.telemetry.emit("process_complete", patched=int(patched))
         return TaskReport(
             findings=[f.signature for f in all_findings],
             exploitability=exploitability,
+            exploitability_scores=exploitability_scores,
             patched=patched,
             patch_signature=patch_signature,
             routing=decision.raw_scores,
             route_rationale=decision.rationale,
+            selected_experts=decision.selected,
+            plan_steps=[s.name for s in plan.active_steps()],
             lifecycle_events={
                 "spawned": lifecycle_decision.spawned,
                 "quiesced": lifecycle_decision.quiesced,
@@ -167,10 +192,14 @@ class SparseExpertAutoSec:
             telemetry=self.telemetry.summary(),
         )
 
-    def _run_dynamic_scan(self, target_file: Path) -> List[VulnerabilitySignal]:
+    def _run_dynamic_scan(self, target_file: Path, budget) -> List[VulnerabilitySignal]:
         findings: List[VulnerabilitySignal] = []
         payloads = self.mutator.generate(self.config.execution.mutation_rounds)
         for payload in payloads[: self.config.execution.fuzz_rounds]:
+            if not budget.can_fuzz():
+                self.telemetry.emit("fuzz_budget_stop", used=budget.used_fuzz_cases)
+                break
+            budget.used_fuzz_cases += 1
             result = self.executor.run(target_file, payload)
             finding = self.analyzer.detect_dynamic(result)
             if finding:
@@ -178,15 +207,16 @@ class SparseExpertAutoSec:
                 self.telemetry.emit("dynamic_finding", signature=finding.signature)
         return findings
 
-    def _training_feedback(self, task_text: str, selected_experts: List[str], patch_signature: str | None, patched: bool) -> None:
+    def _training_feedback(self, task_text: str, selected_experts: List[str], patch_signature: str | None, patched: bool, budget) -> None:
         if not selected_experts:
             return
 
         target = 1.0 if patched else 0.0
         self.learning.record_replay(task_text, selected_experts[0], target)
 
-        if patch_signature and self.learning.enter_training(patch_signature):
+        if patch_signature and self.learning.enter_training(patch_signature) and budget.can_train():
             metrics = self.learning.train_cycle(task_text, selected_experts, success_target=1.0)
+            budget.used_train_steps += self.config.learning.max_train_steps_per_cycle
             self.learning.leave_training()
             self.telemetry.emit("train_cycle", mean_loss=int(metrics.get("mean_loss", 0.0) * 1000))
 
@@ -197,14 +227,12 @@ class SparseExpertAutoSec:
             else:
                 ex.tag_failure()
 
-    def _apply_cached_patch(self, target_file: Path, original_code: str, cached_patch: str, signature: str) -> tuple[bool, str | None]:
-        if cached_patch == original_code:
-            return False, None
-        if self.patcher.validate_patch(target_file, cached_patch, self.mutator):
-            target_file.write_text(cached_patch)
-            self.telemetry.emit("cached_patch_applied", signature=signature)
-            return True, signature
-        return False, None
+    def _find_best_cached_fix(self, signatures: List[str]):
+        for signature in signatures:
+            fix = self.memory.find_similar_fix(signature)
+            if fix:
+                return fix
+        return None
 
     @staticmethod
     def _task_text(target_file: Path, static_findings: List[VulnerabilitySignal]) -> str:

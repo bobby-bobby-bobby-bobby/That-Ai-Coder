@@ -22,7 +22,10 @@ def main() -> None:
         print("Exploitability:", report.exploitability)
         print("Patched:", report.patched)
         print("Patch signature:", report.patch_signature)
+        print("Plan steps:", report.plan_steps)
+        print("Selected experts:", report.selected_experts)
         print("Lifecycle events:", report.lifecycle_events)
+        print("Exploitability scores:", report.exploitability_scores)
         print("Telemetry:", report.telemetry)
         print("Top routing scores:")
         top = sorted(report.routing.items(), key=lambda x: x[1], reverse=True)[:5]

@@ -1,86 +1,73 @@
-# Sparse Expert AutoSec Architecture (Expanded)
+# Sparse Expert AutoSec Architecture (Further Expanded)
 
 ## 1) Stable Core Model
-- `CoreModel` is intentionally small and stable.
+- `CoreModel` remains intentionally small and stable.
 - Only `Adapter` deltas update during controlled training cycles.
-- Core functions:
-  - task encoding (`encode_task`)
-  - complexity estimation (`score_task_complexity`)
-  - planning tags (`propose_plan_tags`)
+- Core produces complexity estimates and plan tags.
 
 ## 2) Sparse Expert Modules
-- 10 seed experts initialized at boot across distinct vulnerability domains.
-- Expert structure:
-  - sparse weights
-  - independent success/failure counters
-  - health/confidence signals
-  - lifecycle state (`ACTIVE`, `QUIESCENT`, `RETIRED`)
+- 10 seed experts initialize distinct vulnerability competencies.
+- Experts remain tiny and independently trainable.
+- Each expert tracks confidence, failures, health, and lifecycle state.
 
-## 3) Controlled Expert Lifecycle (Innovation #1)
-- `ExpertLifecycleManager` handles:
-  - spawn: only when repeated signature failures pass threshold
-  - quiesce: low-health experts moved out of active routing set
-  - retire: persistent low-health quiescent experts retired
-- Prevents random/frequent expert growth and caps instability.
+## 3) Controlled Expert Lifecycle
+- `ExpertLifecycleManager` supports:
+  - spawn on repeated statistically significant failures
+  - quiesce low-health experts
+  - retire persistently weak experts
+- This keeps growth intentional and bounded.
 
-## 4) Routing / Gating
-- Router computes sparse scores with four terms:
-  - exploit score (expert sparse dot)
+## 4) Routing/Gating + Adaptive Bandit
+- `SparseRouter` computes sparse scores with:
+  - exploit score
   - confidence bonus
-  - UCB exploration bonus
+  - exploration bonus
   - load penalty
-- Router selects only 2–5 experts depending on estimated task complexity.
+- `RoutingBandit` adds history-based adaptation so the router improves from outcomes over time.
+- Router still activates only 2–5 experts per task.
 
-## 5) Controlled Learning System
-- Two modes:
-  - `INFERENCE`: no updates
-  - `TRAINING`: explicit, threshold-gated cycle only
-- Includes:
-  - replay buffer
-  - adapter update (parameter-efficient)
-  - per-expert tiny updates
-  - replay rehearsal to reduce forgetting
+## 5) Resource Policy Layer
+- `ResourcePolicy` enforces hard limits:
+  - end-to-end latency budget
+  - fuzz case count budget
+  - train step budget
+- This ensures operation stays practical on constrained hardware.
 
-## 6) External Memory
-- Stores failure records, fix records (with patch code), and tokenized pattern summaries.
-- Retrieval-first behavior: cached successful fix is attempted before generating a new patch.
-- Memory informs:
-  - expert spawning conditions
-  - related signature retrieval
-  - training triggers
+## 6) Task Planning Layer
+- `TaskPlanner` builds compact event-driven plans (`ExecutionPlan`) from detected findings + memory context.
+- The system executes only necessary steps, reducing wasteful computation.
 
-## 7) Execution & Fuzzing
-- `SandboxedExecutor` runs target in ephemeral temp sandbox.
-- `StructuredMutator` performs hybrid seed + structural mutations.
-- Captures:
-  - crashes
-  - command execution behavior
-  - anomaly categories (runtime, unhandled exception, memory error)
+## 7) Controlled Learning System
+- Two explicit modes:
+  - `INFERENCE`: immutable weights
+  - `TRAINING`: gated adaptation only
+- Includes replay + capped cycles + adapter/expert lightweight updates.
 
-## 8) Analysis + Patching + Validation
-- `Analyzer` combines static and dynamic signals.
-- `PatchEngine` deterministically transforms vulnerable patterns.
-- Patch is accepted only after:
-  1. symbolic safety checks (`SymbolicPatchVerifier`) (Innovation #2: hybrid symbolic+neural control)
-  2. dynamic re-validation under mutated payloads
+## 8) External Memory
+- Stores failures, fixes (including patch code), and tokenized failure patterns.
+- Retrieval-first behavior tries known successful fixes before retraining.
+- Memory also drives lifecycle and planning decisions.
 
-## 9) Lightweight Runtime
-- `SparseTensor` for compact representation.
-- `TensorPool` to reduce allocations.
-- `RuntimeCache` for incremental inference on repeated tasks.
+## 9) Execution + Fuzzing + Analysis
+- `SandboxedExecutor` runs targets in isolated temp sandboxes.
+- `StructuredMutator` produces structured adversarial payloads.
+- `Analyzer` now detects both Python and selected C-family vulnerability patterns and computes exploitability scores.
 
-## 10) Colab training workflow
-- Notebook: `notebooks/sparse_autosec_training_colab.ipynb`
-  - clones CVEfixes open-source dataset repo
-  - builds bootstrapped and dataset-driven samples
+## 10) Patching + Verification
+- `PatchRanker` generates multiple candidate patches and ranks them.
+- `SymbolicPatchVerifier` rejects unsafe patch AST patterns.
+- Dynamic re-validation confirms candidate safety before application.
+
+## 11) Novel Ideas
+1. **Controlled expert lifecycle with health states** to cap model growth while preserving specialization.
+2. **Bandit-augmented sparse routing** that improves expert selection using reward signals without dense retraining.
+3. **Budget-aware event planning** that adapts behavior to latency/fuzz/training constraints.
+
+## 12) Colab Training Workflow
+- `notebooks/sparse_autosec_training_colab.ipynb`
+  - clones CVEfixes
   - runs controlled training cycles
-  - exports adapter checkpoint
-- Notebook: `notebooks/sparse_autosec_router_calibration_colab.ipynb`
-  - simulates repeated failure streams
-  - demonstrates lifecycle spawn/quiesce/retire behavior
-
-## 11) Why this design is efficient
-- Sparse activation across experts means only a few modules run per task.
-- Adapter-only core updates avoid catastrophic overwrite and reduce memory pressure.
-- Retrieval-first memory avoids unnecessary retraining.
-- Lifecycle pruning limits model growth and long-term computational drift.
+  - exports adapter checkpoints
+- `notebooks/sparse_autosec_router_calibration_colab.ipynb`
+  - simulates repeated failures
+  - demonstrates lifecycle + adaptive routing behavior

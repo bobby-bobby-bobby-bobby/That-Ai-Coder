@@ -37,9 +37,17 @@ class MemoryConfig:
 
 
 @dataclass
+class PolicyConfig:
+    max_latency_ms: int = 2500
+    max_fuzz_cases: int = 64
+    max_train_steps: int = 24
+
+
+@dataclass
 class AutoSecConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    policy: PolicyConfig = field(default_factory=PolicyConfig)
     artifact_dir: Path = Path("artifacts")
