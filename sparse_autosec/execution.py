@@ -30,13 +30,28 @@ class SandboxedExecutor:
         with tempfile.TemporaryDirectory(prefix=self.sandbox_prefix) as td:
             tmp_target = Path(td) / target_file.name
             tmp_target.write_text(target_file.read_text())
-            proc = subprocess.run(
-                ["python", str(tmp_target), payload],
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_s,
-                cwd=td,
-            )
+            try:
+                proc = subprocess.run(
+                    ["python", str(tmp_target), payload],
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout_s,
+                    cwd=td,
+                )
+            except subprocess.TimeoutExpired as exc:
+                stdout = exc.stdout or ""
+                stderr = exc.stderr or ""
+                if isinstance(stdout, bytes):
+                    stdout = stdout.decode(errors="replace")
+                if isinstance(stderr, bytes):
+                    stderr = stderr.decode(errors="replace")
+                return ExecutionResult(
+                    crashed=True,
+                    stderr=stderr,
+                    stdout=stdout,
+                    return_code=-1,
+                    input_payload=payload,
+                )
             anomaly = self._anomaly(proc.stdout, proc.stderr, proc.returncode)
             return ExecutionResult(
                 crashed=proc.returncode != 0,
