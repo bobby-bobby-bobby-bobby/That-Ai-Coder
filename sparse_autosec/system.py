@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 from typing import Dict, List
 
@@ -233,6 +234,52 @@ class SparseExpertAutoSec:
             if fix:
                 return fix
         return None
+
+
+    def export_state(self) -> Dict[str, object]:
+        return {
+            "config": {
+                "runtime": self.config.runtime.__dict__,
+                "learning": self.config.learning.__dict__,
+                "execution": self.config.execution.__dict__,
+                "policy": self.config.policy.__dict__,
+            },
+            "core_adapter": self.core.adapter.delta,
+            "experts": {
+                name: {
+                    "weights": ex.weights,
+                    "success_count": ex.success_count,
+                    "fail_count": ex.fail_count,
+                    "use_count": ex.use_count,
+                    "state": ex.state.value,
+                }
+                for name, ex in self.experts.experts.items()
+            },
+            "memory_counters": self.memory.counters,
+            "memory_fixes": [fix.__dict__ for fix in self.memory.fixes],
+        }
+
+    def save_state(self, output_file: Path) -> Path:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(json.dumps(self.export_state(), indent=2))
+        return output_file
+
+    @classmethod
+    def load_state(cls, state_file: Path) -> "SparseExpertAutoSec":
+        payload = json.loads(state_file.read_text())
+        system = cls()
+        system.core.adapter.delta = {int(k): float(v) for k, v in payload.get("core_adapter", {}).items()}
+        for name, rec in payload.get("experts", {}).items():
+            if name in system.experts.experts:
+                ex = system.experts.get(name)
+                ex.weights = {int(k): float(v) for k, v in rec.get("weights", {}).items()}
+                ex.success_count = int(rec.get("success_count", ex.success_count))
+                ex.fail_count = int(rec.get("fail_count", ex.fail_count))
+                ex.use_count = int(rec.get("use_count", ex.use_count))
+        system.memory.counters = {str(k): int(v) for k, v in payload.get("memory_counters", {}).items()}
+        for fix in payload.get("memory_fixes", []):
+            system.memory.add_fix(FixRecord(**fix))
+        return system
 
     @staticmethod
     def _task_text(target_file: Path, static_findings: List[VulnerabilitySignal]) -> str:

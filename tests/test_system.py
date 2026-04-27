@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
+import urllib.request
 
 from sparse_autosec.bandit import RoutingBandit
 from sparse_autosec.budget import ResourcePolicy
 from sparse_autosec.config import AutoSecConfig
 from sparse_autosec.dataset import OpenSourceDatasetLoader
 from sparse_autosec.execution import Analyzer, PatchEngine, StructuredMutator
+from sparse_autosec.pipeline import build_default_pipeline
 from sparse_autosec.planner import TaskPlanner
 from sparse_autosec.runtime import SparseRuntime
 from sparse_autosec.symbolic import SymbolicPatchVerifier
 from sparse_autosec.system import SparseExpertAutoSec
+from sparse_autosec.ui_server import launch_ui
 from sparse_autosec.validator import PatchRanker
 
 
@@ -79,6 +83,25 @@ class TestAnalyzer(unittest.TestCase):
         sigs = [f.signature for f in findings]
         self.assertIn("py_eval_user_input", sigs)
         self.assertIn("c_buffer_overflow", sigs)
+
+
+class TestPipelineAndUI(unittest.TestCase):
+    def test_train_export_load_and_ui_status(self):
+        with tempfile.TemporaryDirectory() as td:
+            pipeline = build_default_pipeline(Path(td))
+            pipeline.train_bootstrap(epochs=1)
+            model = Path(td) / "model_export.json"
+            pipeline.export_model(model)
+            self.assertTrue(model.exists())
+
+            loaded = SparseExpertAutoSec.load_state(model)
+            server, url = launch_ui(loaded, host="127.0.0.1", port=8899)
+            try:
+                status_raw = urllib.request.urlopen(f"{url}/api/status", timeout=2).read().decode("utf-8")
+                status = json.loads(status_raw)
+                self.assertTrue(status["ok"])
+            finally:
+                server.stop()
 
 
 class TestEndToEnd(unittest.TestCase):

@@ -8,6 +8,12 @@ version = "0.1.0"
 description = "Sparse expert autonomous vulnerability discovery and repair"
 requires-python = ">=3.10"
 
+[project.scripts]
+autosec = "sparse_autosec.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["sparse_autosec*"]
+
+[tool.setuptools.package-data]
+"sparse_autosec" = ["ui/*.html", "ui/*.js", "ui/*.css"]

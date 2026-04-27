@@ -14,23 +14,33 @@ Sparse Expert AutoSec is a full, modular system for autonomous vulnerability dis
 - Sandboxed execution + structured fuzzing + anomaly capture (`execution.py`)
 - Hybrid symbolic patch verifier + ranked patch selection (`symbolic.py`, `validator.py`)
 - End-to-end orchestrator and telemetry (`system.py`, `telemetry.py`)
-- Open-source dataset loader for training (`dataset.py`)
-- Google Colab notebooks for training and router calibration (`notebooks/*.ipynb`)
+- Open-source dataset loader + pipeline (`dataset.py`, `pipeline.py`)
+- CLI + local web UI server for easy use (`cli.py`, `ui_server.py`, `ui/*`)
 
 ## Open-source training data integration
 The project integrates with the public **CVEfixes** repository:
 - https://github.com/secureIT-project/CVEfixes
 
-The Colab training notebook clones this repository and uses it as the external dataset source while supporting bootstrap samples for fast startup.
-
-## Quick start
+## Fast local usage
+### 1) Train + export model
 ```bash
-python -m sparse_autosec.demo
+python -m sparse_autosec.cli train --epochs 2 --output artifacts/model_export.json
 ```
 
-## Run tests
+### 2) Launch UI (opens browser)
+```bash
+python -m sparse_autosec.cli ui --model artifacts/model_export.json --open-browser
+```
+
+### 3) Terminal scan mode
+```bash
+python -m sparse_autosec.cli scan --model artifacts/model_export.json --target path/to/target.py
+```
+
+## Developer checks
 ```bash
 python -m unittest discover -s tests -p 'test_*.py' -v
+python -m sparse_autosec.demo
 ```
 
 ## Colab notebooks

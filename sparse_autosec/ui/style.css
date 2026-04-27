@@ -1,0 +1,12 @@
+:root { color-scheme: dark; }
+body { font-family: ui-sans-serif, system-ui; margin: 0; background:#0b1020; color:#dbe4ff; }
+main { max-width: 960px; margin: 1.5rem auto; padding: 1rem; }
+h1 { margin-bottom: 0.3rem; }
+.sub { margin-top: 0; opacity: 0.8; }
+section { background:#121932; border:1px solid #24305f; border-radius: 10px; padding: 1rem; margin: 1rem 0; }
+textarea, input, button, pre { width: 100%; box-sizing: border-box; }
+textarea, input { background:#0d1430; color:#dbe4ff; border:1px solid #2b3a76; border-radius:8px; padding:0.6rem; }
+button { background:#4f7cff; color:#fff; border:none; padding:0.7rem; border-radius:8px; cursor:pointer; font-weight:600; }
+button:hover { background:#3f69e1; }
+.row { display:grid; grid-template-columns: 1fr 120px 1fr; gap:0.6rem; align-items:center; }
+pre { background:#0d1430; padding:0.8rem; border-radius:8px; overflow:auto; border:1px solid #2b3a76; }

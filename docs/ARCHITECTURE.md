@@ -51,19 +51,31 @@
 ## 9) Execution + Fuzzing + Analysis
 - `SandboxedExecutor` runs targets in isolated temp sandboxes.
 - `StructuredMutator` produces structured adversarial payloads.
-- `Analyzer` now detects both Python and selected C-family vulnerability patterns and computes exploitability scores.
+- `Analyzer` detects Python and selected C-family vulnerability patterns and computes exploitability scores.
 
 ## 10) Patching + Verification
 - `PatchRanker` generates multiple candidate patches and ranks them.
 - `SymbolicPatchVerifier` rejects unsafe patch AST patterns.
 - Dynamic re-validation confirms candidate safety before application.
 
-## 11) Novel Ideas
+## 11) UX Layer (Speed + Simplicity)
+- `cli.py` provides one-command workflows for train/scan/ui.
+- `ui_server.py` runs lightweight local web UI with no heavy framework.
+- UI supports:
+  - one-click bootstrap training/export
+  - code paste + scan/patch
+  - instant findings and patched code view
+
+## 12) Model portability
+- `SparseExpertAutoSec.save_state/load_state` supports exporting/importing model state.
+- Exported JSON can be downloaded and reused locally from terminal/CLI.
+
+## 13) Novel Ideas
 1. **Controlled expert lifecycle with health states** to cap model growth while preserving specialization.
 2. **Bandit-augmented sparse routing** that improves expert selection using reward signals without dense retraining.
 3. **Budget-aware event planning** that adapts behavior to latency/fuzz/training constraints.
 
-## 12) Colab Training Workflow
+## 14) Colab Training Workflow
 - `notebooks/sparse_autosec_training_colab.ipynb`
   - clones CVEfixes
   - runs controlled training cycles
