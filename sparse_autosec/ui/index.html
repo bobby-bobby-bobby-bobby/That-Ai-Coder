@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sparse AutoSec UI</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main>
+    <h1>Sparse Expert AutoSec</h1>
+    <p class="sub">Fast local vulnerability scan + patch tool</p>
+
+    <section class="row">
+      <button id="trainBtn">Train Bootstrap Model</button>
+      <input id="epochs" type="number" min="1" value="2" />
+      <span id="status"></span>
+    </section>
+
+    <section>
+      <h2>Target Code</h2>
+      <textarea id="code" rows="16">import sys
+
+def run(user):
+    return eval(user)
+
+if __name__ == '__main__':
+    print(run(sys.argv[1]))
+</textarea>
+      <div class="row">
+        <button id="scanBtn">Scan and Patch</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Results</h2>
+      <pre id="results"></pre>
+    </section>
+
+    <section>
+      <h2>Patched Code</h2>
+      <textarea id="patched" rows="16"></textarea>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
