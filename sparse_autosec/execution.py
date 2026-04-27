@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import random
+import re
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +34,7 @@ class SandboxedExecutor:
             tmp_target.write_text(target_file.read_text())
             try:
                 proc = subprocess.run(
-                    ["python", str(tmp_target), payload],
+                    [sys.executable, str(tmp_target), payload],
                     capture_output=True,
                     text=True,
                     timeout=self.timeout_s,
@@ -77,7 +79,8 @@ class SandboxedExecutor:
 class StructuredMutator:
     """Generates mixed grammar-aware and random payloads."""
 
-    def __init__(self) -> None:
+    def __init__(self, seed: int | None = None) -> None:
+        self._rng = random.Random(seed)
         self.seed_payloads = [
             "hello",
             "1+1",
@@ -94,23 +97,23 @@ class StructuredMutator:
     def generate(self, rounds: int = 40) -> List[str]:
         out = list(self.seed_payloads)
         for _ in range(rounds):
-            base = random.choice(self.seed_payloads)
-            mutation_kind = random.choice(["insert", "append", "double", "splice"])
+            base = self._rng.choice(self.seed_payloads)
+            mutation_kind = self._rng.choice(["insert", "append", "double", "splice"])
             out.append(self._mutate(base, mutation_kind))
         return out
 
     def _mutate(self, base: str, kind: str) -> str:
         if kind == "insert":
-            insert = "".join(random.choice(self.extra_operators) for _ in range(random.randint(1, 6)))
-            pos = random.randint(0, len(base))
+            insert = "".join(self._rng.choice(self.extra_operators) for _ in range(self._rng.randint(1, 6)))
+            pos = self._rng.randint(0, len(base))
             return base[:pos] + insert + base[pos:]
         if kind == "append":
-            suffix = random.choice(["&&echo pwned", "||true", ";sleep 0", "#comment", "\nprint(1)"])
+            suffix = self._rng.choice(["&&echo pwned", "||true", ";sleep 0", "#comment", "\nprint(1)"])
             return base + suffix
         if kind == "double":
-            return base + random.choice([" ", "::", "__"]) + base
-        split = random.randint(0, len(base))
-        return base[:split] + random.choice(self.seed_payloads) + base[split:]
+            return base + self._rng.choice([" ", "::", "__"]) + base
+        split = self._rng.randint(0, len(base))
+        return base[:split] + self._rng.choice(self.seed_payloads) + base[split:]
 
 
 @dataclass
@@ -124,7 +127,10 @@ class VulnerabilitySignal:
 class Analyzer:
     def detect_static(self, code: str) -> List[VulnerabilitySignal]:
         findings: List[VulnerabilitySignal] = []
-        if "eval(" in code:
+        # Match eval( only when NOT preceded by a word char (excludes safe_eval(...))
+        # and NOT followed by compile( (excludes the safe_eval helper body).
+        # Allow optional whitespace between eval and ( or between eval( and compile(.
+        if re.search(r'(?<!\w)eval\s*\((?!\s*compile\s*\()', code):
             findings.append(VulnerabilitySignal("py_eval_user_input", "Unsanitized eval() usage", "high", 0.98))
         if "exec(" in code:
             findings.append(VulnerabilitySignal("py_exec_user_input", "exec() exposed to user supplied string", "high", 0.92))

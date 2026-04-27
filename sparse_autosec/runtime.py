@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Iterator, List, Tuple
+
+
+def _stable_hash(text: str, mod: int) -> int:
+    """Deterministic hash unaffected by PYTHONHASHSEED."""
+    return int(hashlib.sha256(text.encode()).hexdigest(), 16) % mod
 
 
 @dataclass
@@ -82,19 +88,27 @@ class SparseRuntime:
         self.cache = RuntimeCache(max_items=cache_items)
 
     def tokenize_sparse(self, text: str) -> SparseTensor:
+        """Return the sparse token vector for *text*.
+
+        The same object is returned on every cache hit so that identity checks
+        (``t1 is t2``) work correctly.  Callers must treat the result as
+        read-only; mutating ``values`` will corrupt the cache entry.
+        """
         key = f"tok::{text}"
         cached = self.cache.get(key)
         if cached is not None:
-            return SparseTensor(size=cached.size, values=dict(cached.values))
+            return cached
 
         t = self.pool.acquire(self.vocab_size)
         for tok in self._iter_tokens(text):
-            idx = hash(tok) % self.vocab_size
+            idx = _stable_hash(tok, self.vocab_size)
             t.values[idx] = t.values.get(idx, 0.0) + 1.0
         result = t.clipped()
         self.cache.set(key, result)
         self.pool.release(t)
-        return result
+        # Return the copy stored in the cache so both the first and subsequent
+        # calls return the identical object (cache.set stores a copy internally).
+        return self.cache.get(key)
 
     def merge_texts(self, texts: List[str], normalize: bool = True) -> SparseTensor:
         merged = SparseTensor(size=self.vocab_size)

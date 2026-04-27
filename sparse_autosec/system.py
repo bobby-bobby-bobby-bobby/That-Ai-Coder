@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List
 
@@ -97,10 +98,13 @@ class SparseExpertAutoSec:
             "path_traversal",
             "dependency_risk",
         ]
+        vocab = self.runtime.vocab_size
+        security_idx = int(hashlib.sha256(b"security").hexdigest(), 16) % vocab
         for idx, spec in enumerate(specs, start=1):
             ex = ExpertModule(name=f"expert_{idx}_{spec}", specialty_keywords=[spec])
-            ex.weights[hash(spec) % self.config.runtime.vocab_size] = 0.85
-            ex.weights[hash("security") % self.config.runtime.vocab_size] = 0.25
+            spec_idx = int(hashlib.sha256(spec.encode()).hexdigest(), 16) % vocab
+            ex.weights[spec_idx] = 0.85
+            ex.weights[security_idx] = 0.25
             self.experts.add_expert(ex)
 
     def process_target(self, target_file: Path) -> TaskReport:
