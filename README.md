@@ -46,3 +46,11 @@ python -m sparse_autosec.demo
 ## Colab notebooks
 - `notebooks/sparse_autosec_training_colab.ipynb`
 - `notebooks/sparse_autosec_router_calibration_colab.ipynb`
+
+
+
+
+
+
+
+In PROGRESS
